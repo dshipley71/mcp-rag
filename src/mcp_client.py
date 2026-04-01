@@ -2,17 +2,15 @@ from __future__ import annotations
 
 from contextlib import AsyncExitStack
 from typing import Any, Optional
+import io
+import os
+import sys
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
 class MCPToolClient:
-    """
-    Minimal stdio MCP client wrapper.
-    Keeps a single warm connection to one local MCP server process.
-    """
-
     def __init__(
         self,
         command: str,
@@ -24,6 +22,18 @@ class MCPToolClient:
         self.env = env or {}
         self._stack = AsyncExitStack()
         self.session: Optional[ClientSession] = None
+        self._errlog = None
+
+    def _open_errlog(self):
+        """
+        Prefer normal stderr when it supports fileno().
+        Fall back to os.devnull in notebook environments like Colab.
+        """
+        try:
+            sys.stderr.fileno()
+            return sys.stderr
+        except (io.UnsupportedOperation, AttributeError):
+            return open(os.devnull, "w", encoding="utf-8")
 
     async def connect(self) -> None:
         params = StdioServerParameters(
@@ -31,7 +41,12 @@ class MCPToolClient:
             args=self.args,
             env=self.env,
         )
-        read_stream, write_stream = await self._stack.enter_async_context(stdio_client(params))
+
+        self._errlog = self._open_errlog()
+
+        read_stream, write_stream = await self._stack.enter_async_context(
+            stdio_client(params, errlog=self._errlog)
+        )
         self.session = await self._stack.enter_async_context(
             ClientSession(read_stream, write_stream)
         )
@@ -53,3 +68,7 @@ class MCPToolClient:
     async def close(self) -> None:
         await self._stack.aclose()
         self.session = None
+
+        if self._errlog is not None and self._errlog is not sys.stderr:
+            self._errlog.close()
+            self._errlog = None
