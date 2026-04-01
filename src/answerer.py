@@ -6,14 +6,10 @@ from src.models import AnswerResult, RetrievedChunk
 
 
 def _clean_line(line: str) -> str:
-    """
-    Remove obvious markdown and document wrapper noise while preserving content.
-    """
     line = line.strip()
     if not line:
         return ""
 
-    # Drop wrapper/meta lines
     if line.startswith("[Document:"):
         return ""
     if line.startswith("[Source:"):
@@ -21,27 +17,22 @@ def _clean_line(line: str) -> str:
     if line == "---":
         return ""
 
-    # Drop markdown headings entirely for v1 to avoid answers like "# Title"
-    if line.startswith("#"):
-        return ""
+    # Keep heading text, but remove markdown markers
+    line = re.sub(r"^#+\s*", "", line)
 
-    # Remove bullet markers but keep content
+    # Remove bullet markers
     line = re.sub(r"^[-*+]\s+", "", line)
 
-    # Remove numbered list prefix but keep content
+    # Remove numbered list prefix
     line = re.sub(r"^\d+\.\s+", "", line)
 
-    # Collapse excessive whitespace
+    # Collapse whitespace
     line = re.sub(r"\s+", " ", line).strip()
 
     return line
 
 
-def _split_into_candidate_sentences(text: str) -> list[str]:
-    """
-    Convert chunk text into cleaned candidate answer units.
-    We keep this simple and deterministic for v1.
-    """
+def _extract_candidates(text: str) -> list[str]:
     candidates: list[str] = []
 
     for raw_line in text.splitlines():
@@ -49,7 +40,6 @@ def _split_into_candidate_sentences(text: str) -> list[str]:
         if not cleaned:
             continue
 
-        # If the line is long prose, split into sentences.
         parts = re.split(r"(?<=[.!?])\s+", cleaned)
         for part in parts:
             part = part.strip()
@@ -59,63 +49,43 @@ def _split_into_candidate_sentences(text: str) -> list[str]:
     return candidates
 
 
-def _select_answer_text(chunks: list[RetrievedChunk], max_sentences: int = 3) -> tuple[str, list[str]]:
-    """
-    Choose the first meaningful sentences from the highest-ranked chunks.
-    Returns answer text and citations used.
-    """
-    selected_sentences: list[str] = []
-    selected_citations: list[str] = []
-
-    for chunk in chunks:
-        candidates = _split_into_candidate_sentences(chunk.text)
-
-        for sentence in candidates:
-            # Skip very short fragments that are unlikely to answer the question
-            if len(sentence) < 20:
-                continue
-
-            selected_sentences.append(sentence)
-            if chunk.chunk_id not in selected_citations:
-                selected_citations.append(chunk.chunk_id)
-
-            if len(selected_sentences) >= max_sentences:
-                answer_text = " ".join(selected_sentences).strip()
-                return answer_text, selected_citations
-
-    return " ".join(selected_sentences).strip(), selected_citations
-
-
 def generate_answer(query: str, chunks: list[RetrievedChunk]) -> AnswerResult:
-    """
-    Minimal deterministic grounded answer generator.
-
-    Rules:
-    - Use retrieved context only
-    - Do not hallucinate missing information
-    - Prefer meaningful prose over markdown headings or wrappers
-    - Return no_evidence if no usable explanatory text is available
-    """
     _ = query
 
     if not chunks:
-        return AnswerResult(
-            answer="",
-            citations=[],
-            status="no_evidence",
-        )
+        return AnswerResult(answer="", citations=[], status="no_evidence")
 
-    answer_text, citations = _select_answer_text(chunks[:3], max_sentences=3)
+    top_chunks = chunks[:3]
 
-    if not answer_text:
-        return AnswerResult(
-            answer="",
-            citations=[],
-            status="no_evidence",
-        )
+    selected_sentences: list[str] = []
+    citations: list[str] = []
 
-    return AnswerResult(
-        answer=answer_text,
-        citations=citations,
-        status="answered",
-    )
+    for chunk in top_chunks:
+        candidates = _extract_candidates(chunk.text)
+
+        for sentence in candidates:
+            if len(sentence) < 10:
+                continue
+
+            selected_sentences.append(sentence)
+            if chunk.chunk_id not in citations:
+                citations.append(chunk.chunk_id)
+
+            if len(selected_sentences) >= 3:
+                return AnswerResult(
+                    answer=" ".join(selected_sentences).strip(),
+                    citations=citations,
+                    status="answered",
+                )
+
+    # Fallback: use first cleaned non-empty line from the best chunk
+    for chunk in top_chunks:
+        candidates = _extract_candidates(chunk.text)
+        if candidates:
+            return AnswerResult(
+                answer=candidates[0],
+                citations=[chunk.chunk_id],
+                status="answered",
+            )
+
+    return AnswerResult(answer="", citations=[], status="no_evidence")
