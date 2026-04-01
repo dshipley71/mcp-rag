@@ -1,4 +1,5 @@
 pytest==8.2.0
+pytest-asyncio
 PyYAML==6.0.1
 mcp
 velocirag[mcp]
