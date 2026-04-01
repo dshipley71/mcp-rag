@@ -1,201 +1,83 @@
 version: "1.0"
-profile: "mcp-rag-v1"
-policy:
-  runtime_discovery_allowed: false
-  external_web_calls_allowed: false
-  max_iterations: 2
-  default_transport: "stdio"
-  answer_must_cite_sources: true
-  pin_registry_candidates: true
-
-global_constraints:
-  retrieval_strategy: "single_backend_primary"
-  primary_retrieval_backend: "velocirag"
-  fusion_method: "rrf"
-  max_query_rewrites: 1
-  max_bm25_results: 20
-  max_vector_results: 20
-  max_fused_candidates: 30
-  max_final_context_chunks: 8
-  require_local_index_snapshot: true
-  require_stable_sorting: true
 
 servers:
-  - logical_name: "retrieval_backend"
-    server_id: "velocirag"
-    registry_source: "mcpservers.org"
-    registry_entry: "haseebkhalid1507/velocirag"
-    recommended: true
-    free_to_use: true
-    self_hosted: true
-    transport: "stdio"
-    launch:
-      command: "velocirag"
-      args: ["mcp", "--db", "./.rag/velocirag"]
-    purpose: >
-      Primary local retrieval engine for MCP-RAG.
-      Handles vector search, BM25 keyword search, metadata filtering,
-      reciprocal-rank-style fusion, and cross-encoder reranking.
-    allowed_capabilities:
-      - "retrieve"
-      - "hybrid_search"
-      - "rerank"
-      - "metadata_filter"
-    deterministic_constraints:
-      use_as_primary_backend: true
-      do_not_pair_with_other_search_backends_in_same_run: true
+  - name: "document_fetch"
+    description: "Retrieve full documents or document chunks by ID."
+    inputs:
+      doc_ids: "list[string]"
+      source: "optional string"
+    outputs:
+      documents:
+        - id: "string"
+          text: "string"
+          metadata: "object"
+    constraints:
+      raw_content_only: true
+      no_external_calls: true
+      stable_ordering: true
+
+  - name: "bm25_search"
+    description: "Keyword-based lexical search."
+    inputs:
+      query: "string"
+      top_k: "int (default=20)"
+    outputs:
+      results:
+        - doc_id: "string"
+          score: "float"
+    constraints:
       fixed_top_k: 20
-      fixed_max_candidates: 30
-      fixed_final_context_chunks: 8
-      require_local_index_snapshot: true
-      require_same_model_build_per_environment: true
-    failure_policy:
-      on_timeout: "fail_closed"
-      on_no_results: "allow_single_query_rewrite_then_retry"
-      on_backend_error: "fallback_to_local_rag_if_enabled"
+      deterministic_results: true
+      no_query_rewrite: true
 
-  - logical_name: "document_store_fallback"
-    server_id: "local_rag"
-    registry_source: "mcpservers.org"
-    registry_entry: "shinpr/mcp-local-rag"
-    recommended: true
-    free_to_use: true
-    self_hosted: true
-    transport: "stdio"
-    launch:
-      command: "mcp-local-rag"
-      args: []
-    purpose: >
-      Optional fallback local RAG server for document ingestion and retrieval.
-      Supports PDF, DOCX, TXT, Markdown, and ingested HTML content.
-    allowed_capabilities:
-      - "ingest_file"
-      - "ingest_data"
-      - "query_documents"
-      - "list_files"
-      - "delete_file"
-      - "status"
-    deterministic_constraints:
-      enabled_by_default: false
-      use_only_when_primary_backend_unavailable: true
-      query_limit_min: 1
-      query_limit_max: 20
-      no_web_fetch_inside_server: true
-    failure_policy:
-      on_timeout: "fail_closed"
-      on_no_results: "return_empty"
+  - name: "vector_search"
+    description: "Semantic search using embeddings."
+    inputs:
+      query: "string"
+      top_k: "int (default=20)"
+    outputs:
+      results:
+        - doc_id: "string"
+          score: "float"
+    constraints:
+      fixed_top_k: 20
+      deterministic_results: true
+      fixed_embedding_model: true
 
-  - logical_name: "document_fetch"
-    server_id: "filesystem"
-    registry_source: "mcpservers.org"
-    registry_entry: "modelcontextprotocol/filesystem"
-    recommended: true
-    free_to_use: true
-    self_hosted: true
-    transport: "stdio"
-    launch:
-      command: "mcp-server-filesystem"
-      args:
-        - "./docs"
-        - "./specs"
-        - "./data"
-    purpose: >
-      Controlled raw file access for reading source documents and metadata
-      from approved local directories only.
-    allowed_capabilities:
-      - "read_text_file"
-      - "get_file_info"
-      - "list_directory"
-      - "search_files"
-    deterministic_constraints:
-      read_only_in_production: true
-      restrict_to_allowed_directories: true
-      no_dynamic_roots_in_production: true
-      prefer_text_reads_only: true
-    failure_policy:
-      on_path_violation: "fail_closed"
-      on_missing_file: "return_not_found"
+  - name: "rerank"
+    description: "Re-rank candidate documents using a cross-encoder."
+    inputs:
+      query: "string"
+      candidates: "list of {doc_id, text}"
+    outputs:
+      reranked:
+        - doc_id: "string"
+          score: "float"
+    constraints:
+      max_candidates: 30
+      deterministic_ordering: true
+      no_filtering: true
 
-  - logical_name: "code_corpus_search"
-    server_id: "code_index_mcp"
-    registry_source: "mcpservers.org"
-    registry_entry: "ViperJuice/Code-Index-MCP"
-    recommended: conditional
-    free_to_use: mostly_true
-    self_hosted: true
-    transport: "stdio"
-    launch:
-      command: "code-index-mcp"
-      args: []
-    purpose: >
-      Optional code-focused retrieval backend for repositories where
-      code is part of the RAG corpus. Better suited for symbols, text search,
-      and repository understanding than general document QA.
-    allowed_capabilities:
-      - "code_search"
-      - "symbol_search"
-      - "text_search"
-    deterministic_constraints:
-      disabled_by_default: true
-      enable_only_for_code_queries: true
-      do_not_use_for_general_document_queries: true
-      avoid_optional_semantic_features_that_require_external_services: true
-    failure_policy:
-      on_error: "skip_server"
+  - name: "fact_check"
+    description: "Validate answer against retrieved evidence."
+    inputs:
+      answer: "string"
+      evidence: "list of {doc_id, text}"
+    outputs:
+      verdict: "pass | fail"
+      confidence: "float"
+      issues: "list[string]"
+    constraints:
+      use_only_provided_evidence: true
+      no_external_knowledge: true
+      binary_decision: true
 
-  - logical_name: "answer_verification"
-    server_id: "perf_mcp"
-    registry_source: "mcpservers.org"
-    registry_entry: "perf-technology/perf-mcp"
-    recommended: optional
-    free_to_use: limited_free_tier
-    self_hosted: false
-    transport: "stdio"
-    launch:
-      command: "npx"
-      args: ["-y", "perf-mcp"]
-      env:
-        PERF_API_KEY: "${PERF_API_KEY}"
-    purpose: >
-      Optional post-answer verification and repair layer.
-      Not part of the strict free baseline because it uses an API key
-      and the listing specifies 200 free verifications.
-    allowed_capabilities:
-      - "perf_verify"
-      - "perf_validate"
-      - "perf_correct"
-    deterministic_constraints:
-      disabled_by_default: true
-      use_only_after_answer_draft: true
-      never_modify_citations_without_revalidation: true
-    failure_policy:
-      on_quota_exceeded: "skip_verification"
-      on_api_error: "skip_verification"
-
-routing:
-  factual_document_query:
-    use_servers:
-      - "retrieval_backend"
-      - "document_fetch"
-    optional_servers:
-      - "answer_verification"
-    notes: >
-      Default path for grounded QA over local documents.
-
-  ingestion_workflow:
-    preferred_server: "document_store_fallback"
-    notes: >
-      Use mcp-local-rag only for local ingestion workflows or as a fallback.
-
-  code_query:
-    use_servers:
-      - "code_corpus_search"
-      - "document_fetch"
-    notes: >
-      Only for repo/code questions, not normal document QA.
-
-  fallback:
-    if_primary_retrieval_unavailable:
-      use_servers:
-        - "document_store_fallback"
-        - "document_fetch"
+global_rules:
+  retrieval_mode: "hybrid"
+  fusion_method: "rrf"
+  max_rerank_candidates: 30
+  max_final_chunks: 8
+  max_iterations: 2
+  allow_query_rewrite: true
+  require_citations: true
+  require_grounded_answers: true
