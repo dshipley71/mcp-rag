@@ -10,7 +10,6 @@ from src.retrieval import (
     run_bm25_search,
     run_vector_search,
 )
-from src.utils import try_parse_json_text
 
 
 def _combine_results(
@@ -18,10 +17,6 @@ def _combine_results(
     vector_results: list[dict],
     max_candidates: int,
 ) -> list[dict]:
-    """
-    Minimal deterministic fusion.
-    Deduplicate by doc_id and keep the max score seen.
-    """
     by_id: dict[str, dict] = {}
 
     for item in bm25_results + vector_results:
@@ -69,15 +64,22 @@ async def run_query(request: QueryRequest, runtime) -> AnswerResult:
             max_candidates=max_candidates,
         )
 
-        chunks = fetch_documents(combined)
-        reranked = rerank_candidates(query, chunks)
-
-        if not reranked:
+        if not combined:
             if retries < max_retries:
                 retries += 1
                 query = rewrite_query(query)
                 continue
 
+            return AnswerResult(
+                answer="",
+                citations=[],
+                status="no_evidence",
+            )
+
+        chunks = fetch_documents(combined)
+        reranked = rerank_candidates(query, chunks)
+
+        if not reranked:
             return AnswerResult(
                 answer="",
                 citations=[],
