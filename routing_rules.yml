@@ -1,0 +1,35 @@
+version: "1.0"
+profile: "mcp-rag-v1-minimal"
+
+defaults:
+  bm25_top_k: 20
+  vector_top_k: 20
+  max_candidates: 30
+  max_final_chunks: 8
+  max_retries: 1
+
+pipeline:
+  - "bm25_search"
+  - "vector_search"
+  - "document_fetch"
+  - "rerank"
+  - "answer"
+
+rules:
+  - name: "always_use_hybrid"
+    action:
+      use_bm25: true
+      use_vector: true
+
+  - name: "retry_if_low_evidence"
+    if:
+      evidence_low: true
+      retries: 0
+    then:
+      action: "rewrite_query"
+
+constraints:
+  must_use_context_only: true
+  must_cite_sources: true
+  no_hallucination: true
+  stop_if_no_evidence: true

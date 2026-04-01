@@ -1,0 +1,150 @@
+1. document_fetch
+
+Purpose:
+Retreive full documents or document chunks by ID or source reference
+
+Inputs:
+{
+  "doc_ids": ["string"],
+  "source": "optional string"
+}
+
+Outputs:
+{
+  "documents": [
+    {
+      "id": "string",
+      "text": "string",
+      "metadata": {}
+    }
+  ]
+}
+
+Constraints:
+- No summarization or modification of text
+- Return raw stored content only
+- Stable ordering (sorted by doc_id)
+- No external calls (must use indexed corpus only)
+
+2. bm25_search
+
+Purpose:
+Keyword-based (lexical) retrieval
+
+Inputs:
+{
+  "query": "string",
+  "top_k": 20
+}
+
+Outputs:
+{
+  "results": [
+    {
+      "doc_id": "string",
+      "score": "float"
+    }
+  ]
+}
+
+Constraints:
+- Fixed top_k = 20
+- Same query → same results
+- No query rewriting inside the server
+- Uses frozen index snapshot
+
+3. vector_search
+
+Purpose:
+Semantic retrieval using embeddings
+
+Inputs:
+{
+  "query": "string",
+  "top_k": 20
+}
+
+Outputs:
+{
+  "results": [
+    {
+      "doc_id": "string",
+      "score": "float"
+    }
+  ]
+}
+
+Constraints:
+- Fixed embedding model (e.g., all-MiniLM-L12-v2)
+- Fixed top_k = 20
+- No dynamic model switching
+- Index snapshot must be versioned
+
+4. rerank
+
+Purpose:
+Re-rank retieved documents using cross-encoder
+
+Inputs:
+{
+  "query": "string",
+  "candidates": [
+    {
+      "doc_id": "string",
+      "text": "string"
+    }
+  ]
+}
+
+Outputs:
+{
+  "reranked": [
+    {
+      "doc_id": "string",
+      "score": "float"
+    }
+  ]
+}
+
+Constraints:
+- Fixed model (e.g., cross-encoder/ms-marco-MiniLM-L12-v2)
+- Max candidates = 30
+- Stable sorting (descending score)
+- No filtering—only reordering
+
+5. fact_check
+
+Purpose:
+Validate answer against retrieved evidence
+
+Inputs:
+{
+  "answer": "string",
+  "evidence": [
+    {
+      "doc_id": "string",
+      "text": "string"
+    }
+  ]
+}
+
+Outputs:
+{
+  "verdict": "pass | fail",
+  "confidence": "float",
+  "issues": ["string"]
+}
+
+Constraints:
+- Must only use provided evidence (no external knowledge)
+- No rewriting of answer
+- Binary outcome (pass/fail)
+- Fixed threshold (e.g., 0.75)
+
+global_rules:
+- max_iterations: 2
+- retrieval_mode: hybrid_only
+- fusion_method: rrf
+- max_rerank_candidates: 30
+- answer_must_cite_sources: true
+- allow_external_calls: false
