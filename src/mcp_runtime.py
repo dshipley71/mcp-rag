@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from pathlib import Path
 from src.mcp_client import MCPToolClient
 
 
@@ -10,7 +10,7 @@ class MCPRuntime:
     """
 
     def __init__(self, db_dir: str = "./.rag/velocirag") -> None:
-        self.db_dir = db_dir
+        self.db_dir = str(Path(db_dir).resolve())
         self.velocirag = MCPToolClient(
             command="velocirag",
             args=["mcp", "--db", self.db_dir],
