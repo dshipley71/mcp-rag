@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import Any, List
 
 
 @dataclass
@@ -12,6 +12,7 @@ class RetrievedChunk:
     chunk_id: str
     text: str
     score: float
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
