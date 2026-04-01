@@ -1,22 +1,19 @@
-from typing import List, Dict
+from __future__ import annotations
+
+import json
+from typing import Any
 
 
-def simple_rrf_fusion(bm25_results: List[Dict], vector_results: List[Dict], k: int = 60):
-    """
-    Minimal Reciprocal Rank Fusion (RRF)
-    Used for deterministic merging of results
-    """
-    scores = {}
+def safe_getattr(obj: Any, name: str, default: Any = None) -> Any:
+    return getattr(obj, name, default)
 
-    for rank, item in enumerate(bm25_results):
-        doc_id = item["doc_id"]
-        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
 
-    for rank, item in enumerate(vector_results):
-        doc_id = item["doc_id"]
-        scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + rank)
+def try_parse_json_text(text: str) -> Any:
+    text = text.strip()
+    if not text:
+        return None
 
-    fused = [{"doc_id": doc_id, "score": score} for doc_id, score in scores.items()]
-    fused.sort(key=lambda x: x["score"], reverse=True)
-
-    return fused
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
