@@ -15,9 +15,9 @@ class MCPToolClient:
     Minimal stdio MCP client wrapper.
 
     Handles:
-    - Colab stderr issues
+    - Colab/Jupyter stderr issues
     - Async lifecycle
-    - Safe teardown
+    - Best-effort teardown
     """
 
     def __init__(
@@ -35,7 +35,7 @@ class MCPToolClient:
 
     def _open_errlog(self):
         """
-        Use real stderr if possible, fallback for Colab.
+        Use real stderr if possible, fallback for Colab/Jupyter.
         """
         try:
             sys.stderr.fileno()
@@ -77,13 +77,11 @@ class MCPToolClient:
 
     async def close(self) -> None:
         """
-        Safe shutdown for Colab/Jupyter.
-        Prevents cancel-scope crash.
+        Best-effort shutdown for notebook environments.
         """
         try:
             await self._stack.aclose()
         except BaseException:
-            # Ignore teardown issues in notebook environments
             pass
 
         self.session = None
@@ -93,5 +91,4 @@ class MCPToolClient:
                 self._errlog.close()
             except BaseException:
                 pass
-
             self._errlog = None
