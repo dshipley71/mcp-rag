@@ -1,83 +1,56 @@
 version: "1.0"
 
 servers:
-  - name: "document_fetch"
-    description: "Retrieve full documents or document chunks by ID."
+  - name: "filesystem"
+    mcp_server: "modelcontextprotocol/filesystem"
+    description: "Source-of-truth file access for ingestion."
     inputs:
-      doc_ids: "list[string]"
-      source: "optional string"
+      path: "string"
     outputs:
-      documents:
-        - id: "string"
-          text: "string"
-          metadata: "object"
+      content: "string"
     constraints:
-      raw_content_only: true
       no_external_calls: true
-      stable_ordering: true
+      read_only_for_ingestion: true
 
-  - name: "bm25_search"
-    description: "Keyword-based lexical search."
+  - name: "document_parser"
+    mcp_server: "Unstructured-IO/UNS-MCP"
+    description: "Parse files into normalized text/elements for indexing."
+    inputs:
+      path: "string"
+    outputs:
+      text: "string"
+      elements: "optional list[object]"
+    constraints:
+      deterministic_normalization: true
+      fail_closed_on_parse_error: true
+
+  - name: "retrieval"
+    mcp_server: "haseebkhalid1507/velocirag"
+    description: "Hybrid retrieval backend and index store."
     inputs:
       query: "string"
-      top_k: "int (default=20)"
+      top_k: "int"
+      content: "string"
     outputs:
-      results:
-        - doc_id: "string"
-          score: "float"
+      results: "list[object]"
     constraints:
-      fixed_top_k: 20
-      deterministic_results: true
-      no_query_rewrite: true
+      hybrid_retrieval_always_on: true
+      retrieval_backend_locked: true
 
-  - name: "vector_search"
-    description: "Semantic search using embeddings."
+  - name: "llm_generate"
+    mcp_server: "jonigl/ollama-mcp-bridge"
+    description: "Cloud-only answer generation through MCP bridge."
     inputs:
-      query: "string"
-      top_k: "int (default=20)"
+      prompt: "string"
+      context: "list[object]"
     outputs:
-      results:
-        - doc_id: "string"
-          score: "float"
-    constraints:
-      fixed_top_k: 20
-      deterministic_results: true
-      fixed_embedding_model: true
-
-  - name: "rerank"
-    description: "Re-rank candidate documents using a cross-encoder."
-    inputs:
-      query: "string"
-      candidates: "list of {doc_id, text}"
-    outputs:
-      reranked:
-        - doc_id: "string"
-          score: "float"
-    constraints:
-      max_candidates: 30
-      deterministic_ordering: true
-      no_filtering: true
-
-  - name: "fact_check"
-    description: "Validate answer against retrieved evidence."
-    inputs:
       answer: "string"
-      evidence: "list of {doc_id, text}"
-    outputs:
-      verdict: "pass | fail"
-      confidence: "float"
-      issues: "list[string]"
     constraints:
-      use_only_provided_evidence: true
-      no_external_knowledge: true
-      binary_decision: true
+      cloud_only: true
+      no_local_ollama: true
 
 global_rules:
   retrieval_mode: "hybrid"
-  fusion_method: "rrf"
-  max_rerank_candidates: 30
-  max_final_chunks: 8
-  max_iterations: 2
-  allow_query_rewrite: true
+  max_retries: 1
   require_citations: true
   require_grounded_answers: true
