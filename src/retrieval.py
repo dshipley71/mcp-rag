@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from src.models import RetrievedChunk
@@ -8,8 +9,7 @@ from src.utils import safe_getattr
 
 def _extract_structured_payload(tool_result: Any) -> Any:
     """
-    VelociRAG returns structuredContent cleanly in the inspection output.
-    Prefer that directly.
+    VelociRAG may return JSON via structuredContent or as text content.
     """
     structured_content = safe_getattr(tool_result, "structuredContent", None)
     if structured_content is not None:
@@ -21,6 +21,18 @@ def _extract_structured_payload(tool_result: Any) -> Any:
             structured = safe_getattr(block, "structuredContent", None)
             if structured is not None:
                 return structured
+
+            text = safe_getattr(block, "text", None)
+            if isinstance(text, str):
+                text = text.strip()
+                if not text:
+                    continue
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    return parsed
 
     return None
 
@@ -90,7 +102,7 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
 
 async def health_check_velocirag(runtime) -> bool:
     """
-    Treat a valid structured health payload as healthy, even if there are zero docs.
+    Treat any parseable health payload dictionary as healthy unless it reports an error.
     """
     try:
         result = await runtime.velocirag.call_tool("health", {})
@@ -101,14 +113,11 @@ async def health_check_velocirag(runtime) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    required_keys = {
-        "total_documents",
-        "total_chunks",
-        "model_name",
-        "db_path",
-        "components",
-    }
-    return required_keys.issubset(payload.keys())
+    error = payload.get("error")
+    if isinstance(error, str) and error.strip():
+        return False
+
+    return True
 
 
 async def run_bm25_search(runtime, query: str, top_k: int = 20) -> list[dict[str, Any]]:
@@ -138,8 +147,8 @@ async def _run_velocirag_search(runtime, query: str, top_k: int = 20) -> list[di
     if not isinstance(payload, dict):
         return []
 
-    total_results = payload.get("total_results", 0)
-    if not isinstance(total_results, int) or total_results <= 0:
+    items = payload.get("results", [])
+    if not isinstance(items, list) or not items:
         return []
 
     return _normalize_search_hits(payload)
