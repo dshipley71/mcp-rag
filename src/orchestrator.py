@@ -76,7 +76,7 @@ async def run_query(request: QueryRequest, runtime) -> AnswerResult:
                 status="no_evidence",
             )
 
-        chunks = fetch_documents(combined)
+        chunks = await fetch_documents(runtime, combined)
         reranked = rerank_candidates(query, chunks)
 
         if not reranked:
