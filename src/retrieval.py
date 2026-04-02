@@ -4,12 +4,16 @@ from pathlib import Path
 from typing import Any
 
 from src.models import RetrievedChunk
-from src.utils import safe_getattr
+from src.utils import safe_getattr, try_parse_json_text
 
 
 def _extract_structured_payload(tool_result: Any) -> Any:
     """
-    Prefer MCP structuredContent directly.
+    Prefer MCP structuredContent directly, but fall back to JSON encoded text blocks.
+
+    VelociRAG MCP often returns payloads like:
+      CallToolResult(content=[TextContent(text='{"results":[...]}')])
+    rather than populating structuredContent.
     """
     structured_content = safe_getattr(tool_result, "structuredContent", None)
     if structured_content is not None:
@@ -22,27 +26,18 @@ def _extract_structured_payload(tool_result: Any) -> Any:
             if structured is not None:
                 return structured
 
+            text = safe_getattr(block, "text", None)
+            if isinstance(text, str):
+                parsed = try_parse_json_text(text)
+                if parsed is not None:
+                    return parsed
+
     return None
 
 
 def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
     """
     Normalize VelociRAG search payload into a stable internal format.
-
-    Observed shape:
-    {
-      "results": [
-        {
-          "content": "...",
-          "score": 0.706,
-          "file_path": "VelociRAG.md",
-          "graph_connections": [...]
-        }
-      ],
-      "search_time_ms": 1134.1,
-      "total_results": 1,
-      "layers_active": [...]
-    }
     """
     if not isinstance(payload, dict):
         return []
@@ -101,7 +96,8 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
 
 async def health_check_velocirag(runtime) -> bool:
     """
-    Treat a valid structured health payload as healthy, even if there are zero docs.
+    Accept a valid VelociRAG health payload whether it arrives as structuredContent
+    or JSON text. A zero-document index is still a healthy service; it just has no data.
     """
     try:
         result = await runtime.velocirag.call_tool("health", {})
@@ -112,13 +108,10 @@ async def health_check_velocirag(runtime) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    required_keys = {
-        "total_documents",
-        "total_chunks",
-        "model_name",
-        "db_path",
-        "components",
-    }
+    if isinstance(payload.get("error"), str) and payload["error"].strip():
+        return False
+
+    required_keys = {"total_documents", "total_chunks"}
     return required_keys.issubset(payload.keys())
 
 
@@ -157,8 +150,11 @@ async def _run_velocirag_search(runtime, query: str, top_k: int = 20) -> list[di
     if not isinstance(payload, dict):
         return []
 
-    total_results = payload.get("total_results", 0)
-    if not isinstance(total_results, int) or total_results <= 0:
+    if isinstance(payload.get("error"), str) and payload["error"].strip():
+        return []
+
+    items = payload.get("results", [])
+    if not isinstance(items, list) or not items:
         return []
 
     return _normalize_search_hits(payload)
