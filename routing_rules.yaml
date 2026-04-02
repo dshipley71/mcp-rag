@@ -1,5 +1,5 @@
-version: "1.0"
-profile: "mcp-rag-v1-minimal"
+version: "2.0"
+profile: "mcp-rag-v2-minimal"
 
 defaults:
   bm25_top_k: 20
@@ -7,6 +7,8 @@ defaults:
   max_candidates: 30
   max_final_chunks: 8
   max_retries: 1
+  answer_via_bridge: true
+  ollama_mode: "cloud_only"
 
 pipeline:
   - "bm25_search"
@@ -20,6 +22,11 @@ rules:
     action:
       use_bm25: true
       use_vector: true
+
+  - name: "answer_via_ollama_bridge"
+    action:
+      use_bridge_for_answer_generation: true
+      use_local_ollama: false
 
   - name: "retry_if_low_evidence"
     if:
