@@ -86,4 +86,4 @@ async def run_query(request: QueryRequest, runtime) -> AnswerResult:
                 status="no_evidence",
             )
 
-        return generate_answer(query, reranked[:max_final_chunks])
+        return await generate_answer(query, reranked[:max_final_chunks], runtime=runtime)

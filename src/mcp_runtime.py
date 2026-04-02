@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from src.mcp_client import MCPToolClient
@@ -11,6 +12,11 @@ class MCPRuntime:
 
     Query-time dependencies are connected by `connect()`.
     Ingestion dependencies are connected explicitly by `connect_ingestion()`.
+    Runtime holder for external integrations.
+
+    v2 keeps retrieval on direct MCP stdio and routes answer generation through
+    the Ollama MCP Bridge HTTP API. The bridge must itself be configured to use
+    Ollama Cloud.
     """
 
     def __init__(
@@ -45,6 +51,9 @@ class MCPRuntime:
 
         self._velocirag_connected = False
         self._ingestion_connected = False
+        self.ollama_bridge_url = os.environ.get("OLLAMA_BRIDGE_URL", "http://127.0.0.1:8000")
+        self.ollama_model = os.environ.get("OLLAMA_CLOUD_MODEL", "gpt-oss:120b")
+        self.ollama_mode = os.environ.get("OLLAMA_MODE", "cloud_only")
 
     async def connect(self) -> None:
         if self._velocirag_connected:
@@ -78,6 +87,11 @@ class MCPRuntime:
             raise RuntimeError("Document parser MCP missing parse tool (expected one of: parse, parse_file, partition)")
 
         self._ingestion_connected = True
+        if self.ollama_mode != "cloud_only":
+            raise RuntimeError(
+                "OLLAMA_MODE must be 'cloud_only' for this project. "
+                "Configure the Ollama MCP Bridge to use Ollama Cloud."
+            )
 
     async def close(self) -> None:
         if self._ingestion_connected:
