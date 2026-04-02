@@ -11,6 +11,18 @@ from src.models import IngestionResult
 from src.utils import safe_getattr, try_parse_json_text
 
 
+def _ensure_allowed_path(path: Path, filesystem_root: str) -> Path:
+    root = Path(filesystem_root).resolve()
+    resolved = path.resolve()
+
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(f"Path is outside allowed ingestion root: {resolved}") from exc
+
+    return resolved
+
+
 def _extract_structured_payload(tool_result: Any) -> Any:
     structured_content = safe_getattr(tool_result, "structuredContent", None)
     if structured_content is not None:
@@ -88,7 +100,8 @@ async def ingest_file(path: str, runtime) -> IngestionResult:
     await runtime.connect()
     await runtime.connect_ingestion()
 
-    resolved_path = str(Path(path).resolve())
+    root = getattr(runtime, "filesystem_root", ".")
+    resolved_path = str(_ensure_allowed_path(Path(path), root))
     filename = Path(resolved_path).name
 
     fs_result = await runtime.filesystem.call_tool("read_file", {"path": resolved_path})
