@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from src.models import RetrievedChunk
@@ -9,7 +8,7 @@ from src.utils import safe_getattr
 
 def _extract_structured_payload(tool_result: Any) -> Any:
     """
-    VelociRAG may return JSON via structuredContent or as text content.
+    Prefer MCP structuredContent directly.
     """
     structured_content = safe_getattr(tool_result, "structuredContent", None)
     if structured_content is not None:
@@ -22,29 +21,26 @@ def _extract_structured_payload(tool_result: Any) -> Any:
             if structured is not None:
                 return structured
 
-            text = safe_getattr(block, "text", None)
-            if isinstance(text, str):
-                text = text.strip()
-                if not text:
-                    continue
-                try:
-                    parsed = json.loads(text)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(parsed, dict):
-                    return parsed
-
     return None
 
 
 def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
     """
-    Normalize the observed VelociRAG search payload:
+    Normalize the observed VelociRAG search payload shape into a stable format.
+
+    Observed shape:
     {
-      "error": "...",
-      "results": [...],
-      "total_results": 0,
-      "search_time_ms": 0
+      "results": [
+        {
+          "content": "...",
+          "score": 0.706,
+          "file_path": "VelociRAG.md",
+          "graph_connections": [...]
+        }
+      ],
+      "search_time_ms": 1134.1,
+      "total_results": 1,
+      "layers_active": [...]
     }
     """
     if not isinstance(payload, dict):
@@ -64,6 +60,7 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
             item.get("doc_id")
             or item.get("id")
             or item.get("source_id")
+            or item.get("file_path")
             or item.get("path")
             or f"result-{idx}"
         )
@@ -78,19 +75,21 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
 
         score = item.get("score", 0.0)
 
-        metadata = {}
-
-
-        if "file_path" in item:
-            metadata["path"] = f"/content/mcp-rag/docs/{item['file_path']}"
-            
+        metadata: dict[str, Any] = {}
         if isinstance(item.get("metadata"), dict):
             metadata = item["metadata"].copy()
 
-        if "path" in item and "path" not in metadata:
-            metadata["path"] = item["path"]
-        if "source" in item and "source" not in metadata:
-            metadata["source"] = item["source"]
+        # VelociRAG returns file_path in the observed payload
+        if "file_path" in item and "path" not in metadata:
+            file_path = str(item["file_path"])
+            # If already absolute, keep it; otherwise map to docs root for v1
+            if file_path.startswith("/"):
+                metadata["path"] = file_path
+            else:
+                metadata["path"] = f"/content/mcp-rag/docs/{file_path}"
+
+        if "graph_connections" in item and "graph_connections" not in metadata:
+            metadata["graph_connections"] = item["graph_connections"]
 
         normalized.append(
             {
@@ -107,7 +106,7 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
 
 async def health_check_velocirag(runtime) -> bool:
     """
-    Treat any parseable health payload dictionary as healthy unless it reports an error.
+    Treat a valid structured health payload as healthy, even if there are zero docs.
     """
     try:
         result = await runtime.velocirag.call_tool("health", {})
@@ -118,18 +117,29 @@ async def health_check_velocirag(runtime) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    error = payload.get("error")
-    if isinstance(error, str) and error.strip():
-        return False
-
-    return True
+    required_keys = {
+        "total_documents",
+        "total_chunks",
+        "model_name",
+        "db_path",
+        "components",
+    }
+    return required_keys.issubset(payload.keys())
 
 
 async def run_bm25_search(runtime, query: str, top_k: int = 20) -> list[dict[str, Any]]:
+    """
+    Logical BM25 stage preserved for the routing contract.
+    Backed by VelociRAG MCP search in v1.
+    """
     return await _run_velocirag_search(runtime, query=query, top_k=top_k)
 
 
 async def run_vector_search(runtime, query: str, top_k: int = 20) -> list[dict[str, Any]]:
+    """
+    Logical vector stage preserved for the routing contract.
+    Backed by the same VelociRAG MCP search in v1.
+    """
     return await _run_velocirag_search(runtime, query=query, top_k=top_k)
 
 
@@ -152,56 +162,56 @@ async def _run_velocirag_search(runtime, query: str, top_k: int = 20) -> list[di
     if not isinstance(payload, dict):
         return []
 
-    items = payload.get("results", [])
-    if not isinstance(items, list) or not items:
+    total_results = payload.get("total_results", 0)
+    if not isinstance(total_results, int) or total_results <= 0:
         return []
 
     return _normalize_search_hits(payload)
 
 
-async def fetch_documents(runtime, search_hits):
+async def fetch_documents(runtime, search_hits: list[dict[str, Any]]) -> list[RetrievedChunk]:
     """
-    Fetch documents using Filesystem MCP.
+    Fetch documents using Filesystem MCP when a path is available.
 
-    Uses metadata path if available.
-    Falls back to VelociRAG text if needed.
+    Order of preference:
+    1. Filesystem read_text_file using metadata['path']
+    2. Fall back to the content returned by VelociRAG search
     """
-
-    chunks = []
+    chunks: list[RetrievedChunk] = []
 
     for hit in search_hits:
         metadata = hit.get("metadata", {})
         path = metadata.get("path")
-
         text = ""
 
         if path:
             try:
                 result = await runtime.filesystem.call_tool(
                     "read_text_file",
-                    {"path": path}
+                    {"path": path},
                 )
 
-                if hasattr(result, "content"):
-                    parts = []
-                    for block in result.content:
-                        if hasattr(block, "text") and block.text:
-                            parts.append(block.text)
-                    text = "\n".join(parts)
-
+                content = safe_getattr(result, "content", None)
+                if content:
+                    parts: list[str] = []
+                    for block in content:
+                        block_text = safe_getattr(block, "text", None)
+                        if isinstance(block_text, str) and block_text.strip():
+                            parts.append(block_text)
+                    text = "\n".join(parts).strip()
             except Exception:
                 text = ""
 
-        # fallback to VelociRAG text
+        # Fallback to VelociRAG returned content if filesystem read fails
         if not text:
-            text = hit.get("text", "")
+            text = str(hit.get("text", "")).strip()
 
-        if text.strip():
+        if text:
             chunks.append(
                 RetrievedChunk(
-                    chunk_id=hit["doc_id"],
+                    chunk_id=str(hit["doc_id"]),
                     text=text,
-                    score=hit.get("score", 0.0),
+                    score=float(hit.get("score", 0.0)),
                     metadata=metadata,
                 )
             )
@@ -210,5 +220,10 @@ async def fetch_documents(runtime, search_hits):
 
 
 def rerank_candidates(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """
+    Deterministic local rerank placeholder.
+    VelociRAG may already return reranked results, so v1 preserves ordering
+    by score and does not introduce a second model here.
+    """
     _ = query
     return sorted(chunks, key=lambda x: x.score, reverse=True)
