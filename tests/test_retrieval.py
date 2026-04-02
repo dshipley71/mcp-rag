@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.retrieval import _extract_structured_payload, _run_velocirag_search
+from src.retrieval import _extract_structured_payload, _run_velocirag_search, health_check_velocirag
 
 
 class FakeVelociRag:
@@ -12,9 +12,14 @@ class FakeVelociRag:
         self._result = result
 
     async def call_tool(self, name, args):
-        assert name == "search"
-        assert "query" in args
-        return self._result
+        if name == "search":
+            assert "query" in args
+            return self._result
+
+        if name == "health":
+            return self._result
+
+        raise AssertionError(f"Unexpected tool call: {name}")
 
 
 class FakeRuntime:
@@ -48,3 +53,21 @@ async def test_run_velocirag_search_accepts_payload_without_total_results():
     assert len(hits) == 1
     assert hits[0]["doc_id"] == "d1"
     assert hits[0]["text"] == "VelociRAG indexes markdown docs."
+
+
+@pytest.mark.asyncio
+async def test_health_check_accepts_minimal_health_payload():
+    tool_result = SimpleNamespace(
+        content=[SimpleNamespace(text='{"total_documents": 19, "total_chunks": 19, "index_dimensions": 384}')]
+    )
+
+    healthy = await health_check_velocirag(FakeRuntime(tool_result))
+    assert healthy is True
+
+
+@pytest.mark.asyncio
+async def test_health_check_rejects_error_payload():
+    tool_result = SimpleNamespace(content=[SimpleNamespace(text='{"error": "database unavailable"}')])
+
+    healthy = await health_check_velocirag(FakeRuntime(tool_result))
+    assert healthy is False

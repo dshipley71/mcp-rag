@@ -102,7 +102,7 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
 
 async def health_check_velocirag(runtime) -> bool:
     """
-    Treat a valid structured health payload as healthy, even if there are zero docs.
+    Treat any parseable health payload dictionary as healthy unless it reports an error.
     """
     try:
         result = await runtime.velocirag.call_tool("health", {})
@@ -113,14 +113,11 @@ async def health_check_velocirag(runtime) -> bool:
     if not isinstance(payload, dict):
         return False
 
-    required_keys = {
-        "total_documents",
-        "total_chunks",
-        "model_name",
-        "db_path",
-        "components",
-    }
-    return required_keys.issubset(payload.keys())
+    error = payload.get("error")
+    if isinstance(error, str) and error.strip():
+        return False
+
+    return True
 
 
 async def run_bm25_search(runtime, query: str, top_k: int = 20) -> list[dict[str, Any]]:
