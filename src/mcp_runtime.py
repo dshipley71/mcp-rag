@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from src.mcp_client import MCPToolClient
@@ -8,97 +7,66 @@ from src.mcp_client import MCPToolClient
 
 class MCPRuntime:
     """
-    Runtime holder for MCP server connections.
+    Runtime for MCP servers.
 
-    Query-time dependencies are connected by `connect()`.
-    Ingestion dependencies are connected explicitly by `connect_ingestion()`.
-    Runtime holder for external integrations.
+    v1:
+    - VelociRAG (retrieval)
+    - Filesystem (document access)
 
-    v2 keeps retrieval on direct MCP stdio and routes answer generation through
-    the Ollama MCP Bridge HTTP API. The bridge must itself be configured to use
-    Ollama Cloud.
+    Unstructured will be added later.
     """
 
-    def __init__(
-        self,
-        db_dir: str = "./.rag/velocirag",
-        filesystem_root: str = ".",
-        filesystem_command: str = "mcp-server-filesystem",
-        filesystem_args: list[str] | None = None,
-        document_parser_command: str = "uns-mcp",
-        document_parser_args: list[str] | None = None,
-    ) -> None:
+    def __init__(self, db_dir: str, docs_dir: str) -> None:
         self.db_dir = str(Path(db_dir).resolve())
-        self.filesystem_root = str(Path(filesystem_root).resolve())
+        self.docs_dir = str(Path(docs_dir).resolve())
 
+        # -------------------------
+        # VelociRAG MCP
+        # -------------------------
         self.velocirag = MCPToolClient(
             command="velocirag",
             args=["mcp", "--db", self.db_dir],
             env={"VELOCIRAG_DB": self.db_dir},
         )
 
-        fs_args = filesystem_args if filesystem_args is not None else [self.filesystem_root]
+        # -------------------------
+        # Filesystem MCP
+        # -------------------------
         self.filesystem = MCPToolClient(
-            command=filesystem_command,
-            args=fs_args,
+            command="npx",
+            args=[
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                self.docs_dir,
+            ],
         )
-
-        parser_args = document_parser_args if document_parser_args is not None else []
-        self.document_parser = MCPToolClient(
-            command=document_parser_command,
-            args=parser_args,
-        )
-
-        self._velocirag_connected = False
-        self._ingestion_connected = False
-        self.ollama_bridge_url = os.environ.get("OLLAMA_BRIDGE_URL", "http://127.0.0.1:8000")
-        self.ollama_model = os.environ.get("OLLAMA_CLOUD_MODEL", "gpt-oss:120b")
-        self.ollama_mode = os.environ.get("OLLAMA_MODE", "cloud_only")
 
     async def connect(self) -> None:
-        if self._velocirag_connected:
-            return
-
         await self.velocirag.connect()
-        tools = await self.velocirag.list_tools()
-        required = {"search", "health"}
-        missing = required - set(tools)
-        if missing:
-            raise RuntimeError(f"VelociRAG missing required MCP tools: {sorted(missing)}")
-
-        self._velocirag_connected = True
-
-    async def connect_ingestion(self) -> None:
-        """
-        Explicitly connect ingestion MCP dependencies.
-        """
-        if self._ingestion_connected:
-            return
-
         await self.filesystem.connect()
-        await self.document_parser.connect()
 
+        # Validate tools
+        vr_tools = set(await self.velocirag.list_tools())
         fs_tools = set(await self.filesystem.list_tools())
-        if "read_file" not in fs_tools:
-            raise RuntimeError("Filesystem MCP missing required tool: read_file")
 
-        parser_tools = set(await self.document_parser.list_tools())
-        if not ({"parse", "parse_file", "partition"} & parser_tools):
-            raise RuntimeError("Document parser MCP missing parse tool (expected one of: parse, parse_file, partition)")
+        required_vr = {"search", "health"}
+        required_fs = {
+            "read_text_file",
+            "read_multiple_files",
+            "search_files",
+            "get_file_info",
+            "list_allowed_directories",
+        }
 
-        self._ingestion_connected = True
-        if self.ollama_mode != "cloud_only":
-            raise RuntimeError(
-                "OLLAMA_MODE must be 'cloud_only' for this project. "
-                "Configure the Ollama MCP Bridge to use Ollama Cloud."
-            )
+        missing_vr = required_vr - vr_tools
+        missing_fs = required_fs - fs_tools
+
+        if missing_vr:
+            raise RuntimeError(f"VelociRAG missing tools: {missing_vr}")
+
+        if missing_fs:
+            raise RuntimeError(f"Filesystem missing tools: {missing_fs}")
 
     async def close(self) -> None:
-        if self._ingestion_connected:
-            await self.document_parser.close()
-            await self.filesystem.close()
-            self._ingestion_connected = False
-
-        if self._velocirag_connected:
-            await self.velocirag.close()
-            self._velocirag_connected = False
+        await self.velocirag.close()
+        await self.filesystem.close()
