@@ -20,7 +20,8 @@ class FakeClient:
 
 
 class FakeRuntime:
-    def __init__(self, parser_payload, add_payload=None):
+    def __init__(self, parser_payload, add_payload=None, filesystem_root="."):
+        self.filesystem_root = filesystem_root
         self.filesystem = FakeClient(
             tools=["read_file"],
             tool_outputs={
@@ -60,7 +61,10 @@ async def test_ingest_file_indexes_parsed_content(tmp_path):
         isError=False,
     )
 
-    result = await ingest_file(str(file_path), FakeRuntime(parser_payload))
+    result = await ingest_file(
+        str(file_path),
+        FakeRuntime(parser_payload, filesystem_root=str(tmp_path)),
+    )
 
     assert result.status == "ingested"
     assert result.doc_id == "doc-123"
@@ -79,4 +83,31 @@ async def test_ingest_file_fails_closed_on_parser_error(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="Document parser failed"):
-        await ingest_file(str(file_path), FakeRuntime(parser_payload))
+        await ingest_file(
+            str(file_path),
+            FakeRuntime(parser_payload, filesystem_root=str(tmp_path)),
+        )
+
+
+@pytest.mark.asyncio
+async def test_ingest_file_rejects_path_outside_allowed_root(tmp_path):
+    allowed_root = tmp_path / "allowed"
+    disallowed_root = tmp_path / "disallowed"
+    allowed_root.mkdir()
+    disallowed_root.mkdir()
+
+    outside_file = disallowed_root / "outside.txt"
+    outside_file.write_text("content", encoding="utf-8")
+
+    parser_payload = SimpleNamespace(
+        structuredContent={"text": "Should not be reached"},
+        isError=False,
+    )
+
+    runtime = FakeRuntime(
+        parser_payload=parser_payload,
+        filesystem_root=str(allowed_root),
+    )
+
+    with pytest.raises(RuntimeError, match="outside allowed ingestion root"):
+        await ingest_file(str(outside_file), runtime)
