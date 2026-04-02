@@ -1,8 +1,9 @@
-version: "1.0"
+version: "2.0"
 
 servers:
   - name: "document_fetch"
-    description: "Retrieve full documents or document chunks by ID."
+    mcp_server: "modelcontextprotocol/filesystem"
+    description: "Retrieve raw documents or document chunks from approved storage paths."
     inputs:
       doc_ids: "list[string]"
       source: "optional string"
@@ -15,9 +16,25 @@ servers:
       raw_content_only: true
       no_external_calls: true
       stable_ordering: true
+      allowed_directories_only: true
+
+  - name: "document_parser"
+    mcp_server: "Unstructured-IO/UNS-MCP"
+    description: "Parse PDFs and mixed-format files into normalized text and metadata for indexing."
+    inputs:
+      file_path: "string"
+    outputs:
+      elements:
+        - text: "string"
+          metadata: "object"
+    constraints:
+      deterministic_output: true
+      no_external_enrichment: true
+      parser_role_only: true
 
   - name: "bm25_search"
-    description: "Keyword-based lexical search."
+    mcp_server: "haseebkhalid1507/velocirag"
+    description: "Keyword-based lexical search via VelociRAG MCP."
     inputs:
       query: "string"
       top_k: "int (default=20)"
@@ -25,13 +42,16 @@ servers:
       results:
         - doc_id: "string"
           score: "float"
+          text: "string"
+          metadata: "object"
     constraints:
       fixed_top_k: 20
       deterministic_results: true
       no_query_rewrite: true
 
   - name: "vector_search"
-    description: "Semantic search using embeddings."
+    mcp_server: "haseebkhalid1507/velocirag"
+    description: "Semantic search using embeddings via VelociRAG MCP."
     inputs:
       query: "string"
       top_k: "int (default=20)"
@@ -39,13 +59,16 @@ servers:
       results:
         - doc_id: "string"
           score: "float"
+          text: "string"
+          metadata: "object"
     constraints:
       fixed_top_k: 20
       deterministic_results: true
       fixed_embedding_model: true
 
   - name: "rerank"
-    description: "Re-rank candidate documents using a cross-encoder."
+    mcp_server: "haseebkhalid1507/velocirag"
+    description: "Re-rank candidate documents using VelociRAG's retrieval ordering."
     inputs:
       query: "string"
       candidates: "list of {doc_id, text}"
@@ -58,8 +81,24 @@ servers:
       deterministic_ordering: true
       no_filtering: true
 
+  - name: "answer"
+    mcp_server: "jonigl/ollama-mcp-bridge"
+    description: "Generate grounded answers through Ollama MCP Bridge backed by Ollama Cloud."
+    inputs:
+      query: "string"
+      context: "list[string]"
+      citations: "list[string]"
+    outputs:
+      answer: "string"
+      citations: "list[string]"
+    constraints:
+      must_use_context_only: true
+      no_external_knowledge: true
+      use_ollama_cloud_via_bridge: true
+      do_not_use_local_ollama: true
+
   - name: "fact_check"
-    description: "Validate answer against retrieved evidence."
+    description: "Reserved optional validation stage for future use."
     inputs:
       answer: "string"
       evidence: "list of {doc_id, text}"
@@ -71,6 +110,7 @@ servers:
       use_only_provided_evidence: true
       no_external_knowledge: true
       binary_decision: true
+      enabled: false
 
 global_rules:
   retrieval_mode: "hybrid"
@@ -81,3 +121,5 @@ global_rules:
   allow_query_rewrite: true
   require_citations: true
   require_grounded_answers: true
+  llm_generation_via: "ollama_mcp_bridge"
+  ollama_mode: "cloud_only"

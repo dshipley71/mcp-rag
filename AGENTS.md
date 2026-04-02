@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project
-Deterministic MCP-RAG v1
+Deterministic MCP-RAG v2
 
 ## Purpose
 Build a retrieval-augmented generation system that uses MCP-style tool roles defined in `mcp_catalog.yaml` and routing behavior defined in `routing_rules.yaml`.
@@ -26,6 +26,19 @@ Do not invent new MCP roles, pipeline stages, or routing behavior unless explici
 - Do not add runtime MCP registry browsing.
 - Do not add external web calls.
 
+## MCP Server Bindings
+The approved external components are:
+- `modelcontextprotocol/filesystem` for source-of-truth document access
+- `Unstructured-IO/UNS-MCP` for multi-format parsing and normalization
+- `haseebkhalid1507/velocirag` for retrieval and retrieval-side ordering
+- `jonigl/ollama-mcp-bridge` for answer generation
+
+### Ollama Rule
+- All answer generation must go through Ollama MCP Bridge.
+- Ollama MCP Bridge must be configured to use Ollama Cloud.
+- Do not use local Ollama models for answer generation.
+- Do not replace Ollama MCP Bridge with a direct LLM provider call unless explicitly requested.
+
 ## Implementation Rules
 - Prefer simple Python modules over complex abstractions.
 - Use explicit functions and data models.
@@ -33,6 +46,8 @@ Do not invent new MCP roles, pipeline stages, or routing behavior unless explici
 - Keep orchestration logic readable and testable.
 - Every pipeline stage must map clearly to a role in `mcp_catalog.yaml`.
 - Every routing decision must map clearly to `routing_rules.yaml`.
+- Use direct MCP calls for retrieval.
+- Use the bridge HTTP API for answer generation.
 
 ## Answering Rules
 - The system must only answer from retrieved evidence.
@@ -46,19 +61,20 @@ Do not invent new MCP roles, pipeline stages, or routing behavior unless explici
 - Keep names stable and obvious.
 - Output complete files when making changes.
 
-## Current v1 Pipeline
+## Current v2 Pipeline
 1. bm25_search
 2. vector_search
 3. document_fetch
 4. rerank
 5. answer
 
-## Current v1 Constraints
+## Current v2 Constraints
 - hybrid retrieval always on
 - max retries = 1
 - must use context only
 - must cite sources
 - stop if no evidence
+- answer generation must use Ollama Cloud through Ollama MCP Bridge
 
 ## Developer Notes
 This project is being built step by step.
