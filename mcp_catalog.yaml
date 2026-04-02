@@ -1,81 +1,56 @@
-version: "2.0"
+version: "1.0"
 
 servers:
-
-  # -----------------------------
-  # STORAGE (SOURCE OF TRUTH)
-  # -----------------------------
   - name: "filesystem"
     mcp_server: "modelcontextprotocol/filesystem"
-    description: "Access raw documents from allowed directories."
+    description: "Source-of-truth file access for ingestion."
     inputs:
       path: "string"
     outputs:
       content: "string"
-      metadata: "object"
     constraints:
-      read_only: true
-      allowed_directories_only: true
+      no_external_calls: true
+      read_only_for_ingestion: true
 
-  # -----------------------------
-  # INGESTION / PARSING
-  # -----------------------------
   - name: "document_parser"
     mcp_server: "Unstructured-IO/UNS-MCP"
-    description: "Parse documents (PDF, DOCX, HTML, etc.) into structured text."
+    description: "Parse files into normalized text/elements for indexing."
     inputs:
-      file_path: "string"
+      path: "string"
     outputs:
-      elements:
-        - text: "string"
-          metadata: "object"
+      text: "string"
+      elements: "optional list[object]"
     constraints:
-      deterministic_output: true
-      no_external_enrichment: true
+      deterministic_normalization: true
+      fail_closed_on_parse_error: true
 
-  # -----------------------------
-  # RETRIEVAL (VelociRAG)
-  # -----------------------------
   - name: "retrieval"
     mcp_server: "haseebkhalid1507/velocirag"
-    description: "Hybrid retrieval (BM25 + vector + reranking)."
+    description: "Hybrid retrieval backend and index store."
     inputs:
       query: "string"
       top_k: "int"
+      content: "string"
     outputs:
-      results:
-        - doc_id: "string"
-          text: "string"
-          score: "float"
-          metadata: "object"
+      results: "list[object]"
     constraints:
-      deterministic_results: true
-      fixed_embedding_model: true
+      hybrid_retrieval_always_on: true
+      retrieval_backend_locked: true
 
-  # -----------------------------
-  # LLM GENERATION (Ollama Cloud via MCP Bridge)
-  # -----------------------------
   - name: "llm_generate"
     mcp_server: "jonigl/ollama-mcp-bridge"
-    description: "Generate grounded answers using retrieved context via Ollama Cloud."
+    description: "Cloud-only answer generation through MCP bridge."
     inputs:
-      query: "string"
-      context: "list[string]"
+      prompt: "string"
+      context: "list[object]"
     outputs:
       answer: "string"
-      citations: "list[string]"
     constraints:
-      must_use_context_only: true
-      no_external_knowledge: true
       cloud_only: true
+      no_local_ollama: true
 
-# -----------------------------
-# GLOBAL RULES
-# -----------------------------
 global_rules:
-  architecture: "rag"
   retrieval_mode: "hybrid"
+  max_retries: 1
   require_citations: true
   require_grounded_answers: true
-  max_chunks: 8
-  max_retries: 1

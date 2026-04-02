@@ -15,8 +15,18 @@ class MCPRuntime:
     Ollama Cloud.
     """
 
-    def __init__(self, db_dir: str = "./.rag/velocirag") -> None:
+    def __init__(
+        self,
+        db_dir: str = "./.rag/velocirag",
+        filesystem_root: str = ".",
+        filesystem_command: str = "mcp-server-filesystem",
+        filesystem_args: list[str] | None = None,
+        document_parser_command: str = "uns-mcp",
+        document_parser_args: list[str] | None = None,
+    ) -> None:
         self.db_dir = str(Path(db_dir).resolve())
+        self.filesystem_root = str(Path(filesystem_root).resolve())
+
         self.velocirag = MCPToolClient(
             command="velocirag",
             args=["mcp", "--db", self.db_dir],
@@ -28,8 +38,10 @@ class MCPRuntime:
         self.ollama_mode = os.environ.get("OLLAMA_MODE", "cloud_only")
 
     async def connect(self) -> None:
-        await self.velocirag.connect()
+        if self._velocirag_connected:
+            return
 
+        await self.velocirag.connect()
         tools = await self.velocirag.list_tools()
         required = {"search", "health"}
         missing = required - set(tools)
@@ -43,4 +55,11 @@ class MCPRuntime:
             )
 
     async def close(self) -> None:
-        await self.velocirag.close()
+        if self._ingestion_connected:
+            await self.document_parser.close()
+            await self.filesystem.close()
+            self._ingestion_connected = False
+
+        if self._velocirag_connected:
+            await self.velocirag.close()
+            self._velocirag_connected = False
