@@ -79,6 +79,11 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
         score = item.get("score", 0.0)
 
         metadata = {}
+
+
+        if "file_path" in item:
+            metadata["path"] = f"/content/mcp-rag/docs/{item['file_path']}"
+            
         if isinstance(item.get("metadata"), dict):
             metadata = item["metadata"].copy()
 
