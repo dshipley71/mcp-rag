@@ -68,8 +68,10 @@ class MCPToolClient:
     async def close(self) -> None:
         try:
             await self._stack.aclose()
-        except Exception:
-            # Ignore AnyIO / notebook cancel scope errors
+        except BaseException:
+            # Colab/Jupyter async subprocess teardown can raise
+            # CancelledError / cancel-scope runtime errors on shutdown.
+            # Best-effort cleanup is enough here.
             pass
     
         self.session = None
@@ -77,6 +79,7 @@ class MCPToolClient:
         if self._errlog is not None and self._errlog is not sys.stderr:
             try:
                 self._errlog.close()
-            except Exception:
+            except BaseException:
                 pass
             self._errlog = None
+                self._errlog = None
