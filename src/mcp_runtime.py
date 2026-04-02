@@ -8,6 +8,10 @@ from src.mcp_client import MCPToolClient
 
 class MCPRuntime:
     """
+    Runtime holder for MCP server connections.
+
+    Query-time dependencies are connected by `connect()`.
+    Ingestion dependencies are connected explicitly by `connect_ingestion()`.
     Runtime holder for external integrations.
 
     v2 keeps retrieval on direct MCP stdio and routes answer generation through
@@ -33,6 +37,20 @@ class MCPRuntime:
             env={"VELOCIRAG_DB": self.db_dir},
         )
 
+        fs_args = filesystem_args if filesystem_args is not None else [self.filesystem_root]
+        self.filesystem = MCPToolClient(
+            command=filesystem_command,
+            args=fs_args,
+        )
+
+        parser_args = document_parser_args if document_parser_args is not None else []
+        self.document_parser = MCPToolClient(
+            command=document_parser_command,
+            args=parser_args,
+        )
+
+        self._velocirag_connected = False
+        self._ingestion_connected = False
         self.ollama_bridge_url = os.environ.get("OLLAMA_BRIDGE_URL", "http://127.0.0.1:8000")
         self.ollama_model = os.environ.get("OLLAMA_CLOUD_MODEL", "gpt-oss:120b")
         self.ollama_mode = os.environ.get("OLLAMA_MODE", "cloud_only")
@@ -48,6 +66,27 @@ class MCPRuntime:
         if missing:
             raise RuntimeError(f"VelociRAG missing required MCP tools: {sorted(missing)}")
 
+        self._velocirag_connected = True
+
+    async def connect_ingestion(self) -> None:
+        """
+        Explicitly connect ingestion MCP dependencies.
+        """
+        if self._ingestion_connected:
+            return
+
+        await self.filesystem.connect()
+        await self.document_parser.connect()
+
+        fs_tools = set(await self.filesystem.list_tools())
+        if "read_file" not in fs_tools:
+            raise RuntimeError("Filesystem MCP missing required tool: read_file")
+
+        parser_tools = set(await self.document_parser.list_tools())
+        if not ({"parse", "parse_file", "partition"} & parser_tools):
+            raise RuntimeError("Document parser MCP missing parse tool (expected one of: parse, parse_file, partition)")
+
+        self._ingestion_connected = True
         if self.ollama_mode != "cloud_only":
             raise RuntimeError(
                 "OLLAMA_MODE must be 'cloud_only' for this project. "

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+"""
+Deterministic ingestion helpers for explicit setup-time indexing.
+"""
+
 from pathlib import Path
 from typing import Any
 
