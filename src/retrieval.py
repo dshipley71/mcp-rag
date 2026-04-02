@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from src.models import RetrievedChunk
@@ -26,7 +27,7 @@ def _extract_structured_payload(tool_result: Any) -> Any:
 
 def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
     """
-    Normalize the observed VelociRAG search payload shape into a stable format.
+    Normalize VelociRAG search payload into a stable internal format.
 
     Observed shape:
     {
@@ -79,14 +80,8 @@ def _normalize_search_hits(payload: Any) -> list[dict[str, Any]]:
         if isinstance(item.get("metadata"), dict):
             metadata = item["metadata"].copy()
 
-        # VelociRAG returns file_path in the observed payload
-        if "file_path" in item and "path" not in metadata:
-            file_path = str(item["file_path"])
-            # If already absolute, keep it; otherwise map to docs root for v1
-            if file_path.startswith("/"):
-                metadata["path"] = file_path
-            else:
-                metadata["path"] = f"/content/mcp-rag/docs/{file_path}"
+        if "file_path" in item:
+            metadata["file_path"] = str(item["file_path"])
 
         if "graph_connections" in item and "graph_connections" not in metadata:
             metadata["graph_connections"] = item["graph_connections"]
@@ -171,24 +166,25 @@ async def _run_velocirag_search(runtime, query: str, top_k: int = 20) -> list[di
 
 async def fetch_documents(runtime, search_hits: list[dict[str, Any]]) -> list[RetrievedChunk]:
     """
-    Fetch documents using Filesystem MCP when a path is available.
+    Fetch documents using Filesystem MCP when file_path metadata is available.
 
     Order of preference:
-    1. Filesystem read_text_file using metadata['path']
+    1. Filesystem read_text_file using runtime.docs_dir / file_path
     2. Fall back to the content returned by VelociRAG search
     """
     chunks: list[RetrievedChunk] = []
 
     for hit in search_hits:
         metadata = hit.get("metadata", {})
-        path = metadata.get("path")
+        file_path = metadata.get("file_path")
         text = ""
 
-        if path:
+        if file_path:
             try:
+                resolved_path = Path(runtime.docs_dir) / file_path
                 result = await runtime.filesystem.call_tool(
                     "read_text_file",
-                    {"path": path},
+                    {"path": str(resolved_path)},
                 )
 
                 content = safe_getattr(result, "content", None)
@@ -199,10 +195,10 @@ async def fetch_documents(runtime, search_hits: list[dict[str, Any]]) -> list[Re
                         if isinstance(block_text, str) and block_text.strip():
                             parts.append(block_text)
                     text = "\n".join(parts).strip()
+                    metadata["path"] = str(resolved_path)
             except Exception:
                 text = ""
 
-        # Fallback to VelociRAG returned content if filesystem read fails
         if not text:
             text = str(hit.get("text", "")).strip()
 
