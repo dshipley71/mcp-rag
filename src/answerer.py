@@ -40,7 +40,6 @@ def _extract_candidates(text: str) -> list[str]:
         if not cleaned:
             continue
 
-        # Split prose into smaller units if possible
         parts = re.split(r"(?<=[.!?])\s+", cleaned)
         for part in parts:
             part = part.strip()
@@ -88,7 +87,6 @@ def generate_answer(query: str, chunks: list[RetrievedChunk]) -> AnswerResult:
                     status="answered",
                 )
 
-    # Fallback: first cleaned candidate from best chunk
     for chunk in top_chunks:
         candidates = _extract_candidates(chunk.text)
         if candidates:
