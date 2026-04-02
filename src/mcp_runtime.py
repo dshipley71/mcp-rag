@@ -13,25 +13,19 @@ class MCPRuntime:
     - VelociRAG (retrieval)
     - Filesystem (document access)
 
-    Unstructured will be added later.
+    Unstructured can be added later without changing the query-time path.
     """
 
     def __init__(self, db_dir: str, docs_dir: str) -> None:
         self.db_dir = str(Path(db_dir).resolve())
         self.docs_dir = str(Path(docs_dir).resolve())
 
-        # -------------------------
-        # VelociRAG MCP
-        # -------------------------
         self.velocirag = MCPToolClient(
             command="velocirag",
             args=["mcp", "--db", self.db_dir],
             env={"VELOCIRAG_DB": self.db_dir},
         )
 
-        # -------------------------
-        # Filesystem MCP
-        # -------------------------
         self.filesystem = MCPToolClient(
             command="npx",
             args=[
@@ -45,7 +39,6 @@ class MCPRuntime:
         await self.velocirag.connect()
         await self.filesystem.connect()
 
-        # Validate tools
         vr_tools = set(await self.velocirag.list_tools())
         fs_tools = set(await self.filesystem.list_tools())
 
@@ -68,5 +61,12 @@ class MCPRuntime:
             raise RuntimeError(f"Filesystem missing tools: {missing_fs}")
 
     async def close(self) -> None:
-        await self.velocirag.close()
-        await self.filesystem.close()
+        try:
+            await self.velocirag.close()
+        except BaseException:
+            pass
+
+        try:
+            await self.filesystem.close()
+        except BaseException:
+            pass
