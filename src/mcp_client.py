@@ -66,9 +66,17 @@ class MCPToolClient:
         return await self.session.call_tool(name, arguments)
 
     async def close(self) -> None:
-        await self._stack.aclose()
+        try:
+            await self._stack.aclose()
+        except Exception:
+            # Ignore AnyIO / notebook cancel scope errors
+            pass
+    
         self.session = None
-
+    
         if self._errlog is not None and self._errlog is not sys.stderr:
-            self._errlog.close()
+            try:
+                self._errlog.close()
+            except Exception:
+                pass
             self._errlog = None
