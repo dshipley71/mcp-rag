@@ -20,3 +20,11 @@ class AnswerResult:
     answer: str
     citations: List[str] = field(default_factory=list)
     status: str = "answered"
+
+
+@dataclass
+class IngestionResult:
+    path: str
+    doc_id: str
+    status: str
+    metadata: dict[str, Any] = field(default_factory=dict)
