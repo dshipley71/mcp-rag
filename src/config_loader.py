@@ -1,23 +1,10 @@
-from pathlib import Path
 from typing import Any
 
-import yaml
-
-from src.config import load_catalog
+from src.config import load_catalog, _load_yaml_file
 
 
 def load_yaml_file(path: str) -> dict[str, Any]:
-    file_path = Path(path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"Missing config file: {path}")
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-
-    if not isinstance(data, dict):
-        raise ValueError(f"Config file must load as a dictionary: {path}")
-
-    return data
+    return _load_yaml_file(path)
 
 
 def load_mcp_catalog() -> dict[str, Any]:

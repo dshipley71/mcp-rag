@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.config import load_catalog
 import yaml
 
 
@@ -38,3 +39,19 @@ def test_routing_rules_has_required_sections():
     assert "rules" in data
     assert "constraints" in data
     assert isinstance(data["pipeline"], list), "pipeline must be a list"
+
+
+def test_load_catalog_maps_real_default_commands(monkeypatch):
+    monkeypatch.delenv("RETRIEVAL_MCP_COMMAND", raising=False)
+    monkeypatch.delenv("UNSTRUCTURED_MCP_COMMAND", raising=False)
+    monkeypatch.delenv("FILESYSTEM_MCP_COMMAND", raising=False)
+    monkeypatch.setenv("MCP_FILESYSTEM_ROOT", "/tmp/docs")
+    monkeypatch.setenv("VELOCIRAG_DB", "/tmp/velocirag-db")
+
+    catalog = load_catalog("mcp_catalog.yaml")
+
+    assert catalog["retrieval"]["command"] == "velocirag"
+    assert catalog["document_parser"]["command"] == "uns_mcp"
+    assert catalog["filesystem"]["command"] == "npx"
+    assert catalog["filesystem"]["args"][-1] == "/tmp/docs"
+    assert catalog["retrieval"]["env"]["VELOCIRAG_DB"] == "/tmp/velocirag-db"

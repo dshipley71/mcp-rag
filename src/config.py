@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -21,65 +22,71 @@ def _load_yaml_file(path: str) -> dict[str, Any]:
     return data
 
 
-def _default_server_config(server_name: str) -> dict[str, Any]:
-    filesystem_root = os.environ.get("MCP_FILESYSTEM_ROOT", "./docs")
-
-    defaults: dict[str, dict[str, Any]] = {
-        "filesystem": {
-            "command": os.environ.get("FILESYSTEM_MCP_COMMAND", "npx"),
-            "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                filesystem_root,
-            ],
-        },
-        "document_parser": {
-            "command": os.environ.get("UNSTRUCTURED_MCP_COMMAND", "unstructured-mcp"),
-            "args": [],
-        },
-        "retrieval": {
-            "command": os.environ.get("RETRIEVAL_MCP_COMMAND", "velocirag-mcp"),
-            "args": [],
-        },
-        "llm_generate": {
-            "command": os.environ.get("LLM_GENERATE_MCP_COMMAND", "ollama-mcp-bridge"),
-            "args": [],
-        },
-    }
-
-    if server_name not in defaults:
-        raise KeyError(f"Unsupported MCP server role in catalog: {server_name}")
-
-    return defaults[server_name].copy()
+def _split_env_args(name: str) -> list[str]:
+    raw = os.environ.get(name, "").strip()
+    return shlex.split(raw) if raw else []
 
 
 def load_catalog(path: str = "mcp_catalog.yaml") -> dict[str, Any]:
-    """
-    Load the repository MCP catalog and normalize it into an executable runtime catalog.
+    raw = _load_yaml_file(path)
+    servers = raw.get("servers", [])
+    if not isinstance(servers, list):
+        raise ValueError("mcp_catalog.yaml must define 'servers' as a list")
 
-    Supported inputs:
-    1. High-level repo catalog with a `servers` list.
-    2. Already-normalized runtime catalog keyed by role name.
-    """
-    data = _load_yaml_file(path)
+    filesystem_root = os.environ.get("MCP_FILESYSTEM_ROOT", os.environ.get("DOCS_DIR", "./docs"))
+    velocirag_db = os.environ.get("VELOCIRAG_DB", "./.rag/velocirag")
 
-    if "servers" not in data:
-        return data
+    catalog: dict[str, Any] = {}
 
-    runtime_catalog: dict[str, Any] = {}
-    for entry in data.get("servers", []):
-        if not isinstance(entry, dict):
+    for server in servers:
+        if not isinstance(server, dict):
             continue
 
-        name = entry.get("name")
-        if not isinstance(name, str) or not name.strip():
-            continue
+        name = server.get("name")
+        if name == "filesystem":
+            command = os.environ.get("FILESYSTEM_MCP_COMMAND", "npx")
+            args = _split_env_args("FILESYSTEM_MCP_ARGS") or [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                filesystem_root,
+            ]
+            catalog["filesystem"] = {
+                "command": command,
+                "args": args,
+                "env": {},
+            }
+        elif name == "document_parser":
+            command = os.environ.get("UNSTRUCTURED_MCP_COMMAND", "uns_mcp")
+            args = _split_env_args("UNSTRUCTURED_MCP_ARGS")
+            env: dict[str, str] = {}
+            if os.environ.get("UNSTRUCTURED_API_KEY"):
+                env["UNSTRUCTURED_API_KEY"] = os.environ["UNSTRUCTURED_API_KEY"]
+            catalog["document_parser"] = {
+                "command": command,
+                "args": args,
+                "env": env,
+            }
+        elif name == "retrieval":
+            command = os.environ.get("RETRIEVAL_MCP_COMMAND", "velocirag")
+            args = _split_env_args("RETRIEVAL_MCP_ARGS")
+            env = {"VELOCIRAG_DB": velocirag_db}
+            catalog["retrieval"] = {
+                "command": command,
+                "args": args,
+                "env": env,
+            }
+        elif name == "llm_generate":
+            command = os.environ.get("LLM_GENERATE_MCP_COMMAND", "ollama-mcp-bridge")
+            args = _split_env_args("LLM_GENERATE_MCP_ARGS")
+            catalog["llm_generate"] = {
+                "command": command,
+                "args": args,
+                "env": {},
+            }
 
-        runtime_catalog[name] = _default_server_config(name)
+    if "filesystem" in catalog:
+        catalog["filesystem_root"] = filesystem_root
+    if "retrieval" in catalog:
+        catalog["docs_dir"] = filesystem_root
 
-    filesystem_root = os.environ.get("MCP_FILESYSTEM_ROOT")
-    if filesystem_root:
-        runtime_catalog["filesystem_root"] = filesystem_root
-
-    runtime_catalog["_raw_catalog"] = data
-    return runtime_catalog
+    return catalog
