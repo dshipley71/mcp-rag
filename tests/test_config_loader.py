@@ -55,3 +55,5 @@ def test_load_catalog_maps_real_default_commands(monkeypatch):
     assert catalog["filesystem"]["command"] == "npx"
     assert catalog["filesystem"]["args"][-1] == "/tmp/docs"
     assert catalog["retrieval"]["env"]["VELOCIRAG_DB"] == "/tmp/velocirag-db"
+
+    assert catalog["retrieval"]["args"] == ["mcp"]

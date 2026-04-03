@@ -68,7 +68,7 @@ def load_catalog(path: str = "mcp_catalog.yaml") -> dict[str, Any]:
             }
         elif name == "retrieval":
             command = os.environ.get("RETRIEVAL_MCP_COMMAND", "velocirag")
-            args = _split_env_args("RETRIEVAL_MCP_ARGS")
+            args = _split_env_args("RETRIEVAL_MCP_ARGS") or ["mcp"]
             env = {"VELOCIRAG_DB": velocirag_db}
             catalog["retrieval"] = {
                 "command": command,
