@@ -1,7 +1,6 @@
 pytest==8.2.0
 PyYAML==6.0.1
 mcp
-velocirag[mcp]
 nest_asyncio
 rich
 anyio
@@ -11,3 +10,7 @@ sqlite-utils
 
 # Only add if not already present
 unstructured-client
+
+# mcp servers
+velocirag[mcp]
+uns_mcp
