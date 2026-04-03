@@ -3,6 +3,8 @@ from typing import Any
 
 import yaml
 
+from src.config import load_catalog
+
 
 def load_yaml_file(path: str) -> dict[str, Any]:
     file_path = Path(path)
@@ -19,7 +21,7 @@ def load_yaml_file(path: str) -> dict[str, Any]:
 
 
 def load_mcp_catalog() -> dict[str, Any]:
-    return load_yaml_file("mcp_catalog.yaml")
+    return load_catalog("mcp_catalog.yaml")
 
 
 def load_routing_rules() -> dict[str, Any]:

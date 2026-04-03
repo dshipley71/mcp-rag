@@ -4,11 +4,15 @@ from __future__ import annotations
 Deterministic ingestion helpers for explicit setup-time indexing.
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
 from src.models import IngestionResult
 from src.utils import safe_getattr, try_parse_json_text
+
+DEFAULT_CHUNK_SIZE = 1200
+DEFAULT_CHUNK_OVERLAP = 150
 
 
 def _ensure_allowed_path(path: Path, filesystem_root: str) -> Path:
@@ -24,6 +28,9 @@ def _ensure_allowed_path(path: Path, filesystem_root: str) -> Path:
 
 
 def _extract_structured_payload(tool_result: Any) -> Any:
+    if isinstance(tool_result, dict):
+        return tool_result
+
     structured_content = safe_getattr(tool_result, "structuredContent", None)
     if structured_content is not None:
         return structured_content
@@ -51,37 +58,98 @@ def _normalize_parsed_text(payload: Any) -> tuple[str, dict[str, Any]]:
     if isinstance(payload.get("error"), str) and payload["error"].strip():
         raise RuntimeError(f"Document parser failed: {payload['error']}")
 
+    metadata_value = payload.get("metadata")
+    metadata = metadata_value.copy() if isinstance(metadata_value, dict) else {}
+
     if isinstance(payload.get("text"), str) and payload["text"].strip():
-        return payload["text"].strip(), payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+        return payload["text"].strip(), metadata
 
     if isinstance(payload.get("content"), str) and payload["content"].strip():
-        return payload["content"].strip(), payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+        return payload["content"].strip(), metadata
 
     elements = payload.get("elements")
     if isinstance(elements, list):
         lines: list[str] = []
-        file_type = None
+        element_types: list[str] = []
         for element in elements:
             if not isinstance(element, dict):
                 continue
             text = element.get("text")
             if isinstance(text, str) and text.strip():
                 lines.append(text.strip())
-            if file_type is None and isinstance(element.get("type"), str):
-                file_type = element["type"]
+            element_type = element.get("type")
+            if isinstance(element_type, str) and element_type.strip():
+                element_types.append(element_type.strip())
 
-        normalized = "\n".join(lines).strip()
+        normalized = "\n\n".join(lines).strip()
         if normalized:
-            metadata: dict[str, Any] = {}
-            if file_type:
-                metadata["file_type"] = file_type
+            if element_types:
+                metadata["element_types"] = sorted(set(element_types))
             return normalized, metadata
 
     raise RuntimeError("Document parser returned no text content")
 
 
+def _normalize_tool_names(list_tools_result: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(list_tools_result, list):
+        for item in list_tools_result:
+            if isinstance(item, str):
+                names.add(item)
+            elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                names.add(item["name"])
+    return names
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
+    if paragraphs:
+        return paragraphs
+    return [text.strip()] if text.strip() else []
+
+
+def _chunk_text(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP) -> list[str]:
+    text = text.strip()
+    if not text:
+        return []
+
+    paragraphs = _split_paragraphs(text)
+    if len(text) <= chunk_size and len(paragraphs) <= 1:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+
+    for paragraph in paragraphs:
+        candidate = f"{current}\n\n{paragraph}".strip() if current else paragraph
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current.strip())
+            tail = current[-overlap:].strip() if overlap > 0 else ""
+            current = f"{tail}\n\n{paragraph}".strip() if tail else paragraph
+        else:
+            start = 0
+            while start < len(paragraph):
+                end = min(start + chunk_size, len(paragraph))
+                piece = paragraph[start:end].strip()
+                if piece:
+                    chunks.append(piece)
+                if end >= len(paragraph):
+                    current = ""
+                    break
+                start = max(end - overlap, start + 1)
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
 async def _call_parser(runtime, path: str) -> Any:
-    parser_tools = await runtime.document_parser.list_tools()
+    parser_tools = _normalize_tool_names(await runtime.document_parser.list_tools())
 
     if "parse_file" in parser_tools:
         return await runtime.document_parser.call_tool("parse_file", {"path": path})
@@ -95,7 +163,7 @@ async def _call_parser(runtime, path: str) -> Any:
 
 async def ingest_file(path: str, runtime) -> IngestionResult:
     """
-    Ingestion flow: filesystem -> document parser -> VelociRAG add_document.
+    Ingestion flow: filesystem -> document parser -> deterministic chunks -> VelociRAG add_document.
     """
     await runtime.connect()
     await runtime.connect_ingestion()
@@ -114,35 +182,54 @@ async def ingest_file(path: str, runtime) -> IngestionResult:
 
     parsed_payload = _extract_structured_payload(parser_result)
     normalized_text, parser_metadata = _normalize_parsed_text(parsed_payload)
+    chunks = _chunk_text(normalized_text)
+    if not chunks:
+        raise RuntimeError(f"Document parser returned empty content for file: {resolved_path}")
 
-    metadata: dict[str, Any] = {
-        "original_path": resolved_path,
+    file_hash = hashlib.sha1(resolved_path.encode("utf-8")).hexdigest()[:12]
+    chunk_ids: list[str] = []
+
+    for idx, chunk_text in enumerate(chunks):
+        chunk_id = f"{file_hash}-chunk-{idx:04d}"
+        chunk_metadata: dict[str, Any] = {
+            "source_path": resolved_path,
+            "file_name": filename,
+            "file_type": Path(filename).suffix.lower().lstrip("."),
+            "parser_used": "document_parser",
+            "chunk_index": idx,
+            "total_chunks": len(chunks),
+        }
+        chunk_metadata.update(parser_metadata)
+
+        add_result = await runtime.velocirag.call_tool(
+            "add_document",
+            {
+                "content": chunk_text,
+                "source": resolved_path,
+                "doc_id": chunk_id,
+                "metadata": chunk_metadata,
+            },
+        )
+        if safe_getattr(add_result, "isError", False):
+            raise RuntimeError(f"VelociRAG indexing failed for file: {resolved_path}")
+
+        chunk_ids.append(chunk_id)
+
+    result_metadata: dict[str, Any] = {
+        "source_path": resolved_path,
         "file_name": filename,
         "file_type": Path(filename).suffix.lower().lstrip("."),
+        "parser_used": "document_parser",
+        "chunk_count": len(chunks),
+        "chunk_ids": chunk_ids,
     }
-    metadata.update(parser_metadata)
-
-    add_result = await runtime.velocirag.call_tool(
-        "add_document",
-        {
-            "content": normalized_text,
-            "source": resolved_path,
-            "metadata": metadata,
-        },
-    )
-    if safe_getattr(add_result, "isError", False):
-        raise RuntimeError(f"VelociRAG indexing failed for file: {resolved_path}")
-
-    payload = _extract_structured_payload(add_result)
-    doc_id = filename
-    if isinstance(payload, dict) and isinstance(payload.get("doc_id"), str):
-        doc_id = payload["doc_id"]
+    result_metadata.update(parser_metadata)
 
     return IngestionResult(
         path=resolved_path,
-        doc_id=doc_id,
+        doc_id=chunk_ids[0],
         status="ingested",
-        metadata=metadata,
+        metadata=result_metadata,
     )
 
 
