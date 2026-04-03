@@ -8,3 +8,6 @@ anyio
 requests
 pysqlite3
 sqlite-utils
+
+# Only add if not already present
+unstructured-client
