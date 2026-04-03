@@ -1,72 +1,69 @@
-from __future__ import annotations
-
-from pathlib import Path
+import os
+from typing import Optional
 
 from src.mcp_client import MCPToolClient
 
 
 class MCPRuntime:
-    """
-    Runtime for MCP servers.
+    def __init__(self, catalog: dict):
+        self.catalog = catalog
 
-    v1:
-    - VelociRAG (retrieval)
-    - Filesystem (document access)
+        # Existing (DO NOT CHANGE)
+        self.retrieval: Optional[MCPToolClient] = None
+        self.filesystem: Optional[MCPToolClient] = None
 
-    Unstructured can be added later without changing the query-time path.
-    """
+        # NEW
+        self.document_parser: Optional[MCPToolClient] = None
 
-    def __init__(self, db_dir: str, docs_dir: str) -> None:
-        self.db_dir = str(Path(db_dir).resolve())
-        self.docs_dir = str(Path(docs_dir).resolve())
+    async def connect(self):
+        """
+        Existing query-time connections ONLY.
+        DO NOT modify behavior.
+        """
+        self.retrieval = MCPToolClient(self.catalog["retrieval"])
+        await self.retrieval.connect()
 
-        self.velocirag = MCPToolClient(
-            command="velocirag",
-            args=["mcp", "--db", self.db_dir],
-            env={"VELOCIRAG_DB": self.db_dir},
-        )
-
-        self.filesystem = MCPToolClient(
-            command="npx",
-            args=[
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                self.docs_dir,
-            ],
-        )
-
-    async def connect(self) -> None:
-        await self.velocirag.connect()
+        self.filesystem = MCPToolClient(self.catalog["filesystem"])
         await self.filesystem.connect()
 
-        vr_tools = set(await self.velocirag.list_tools())
-        fs_tools = set(await self.filesystem.list_tools())
+    async def connect_ingestion(self):
+        """
+        NEW: Connect parser + validate tools.
+        Deterministic. Fail-fast.
+        """
 
-        required_vr = {"search", "health"}
-        required_fs = {
-            "read_text_file",
-            "read_multiple_files",
-            "search_files",
-            "get_file_info",
-            "list_allowed_directories",
-        }
+        parser_cfg = self.catalog.get("document_parser")
+        if not parser_cfg:
+            raise RuntimeError("document_parser not defined in catalog")
 
-        missing_vr = required_vr - vr_tools
-        missing_fs = required_fs - fs_tools
+        # Optional API key pass-through
+        env = dict(os.environ)
+        api_key = env.get("UNSTRUCTURED_API_KEY")
 
-        if missing_vr:
-            raise RuntimeError(f"VelociRAG missing tools: {missing_vr}")
+        if api_key:
+            parser_cfg = dict(parser_cfg)
+            parser_cfg["env"] = parser_cfg.get("env", {})
+            parser_cfg["env"]["UNSTRUCTURED_API_KEY"] = api_key
 
-        if missing_fs:
-            raise RuntimeError(f"Filesystem missing tools: {missing_fs}")
+        self.document_parser = MCPToolClient(parser_cfg)
+        await self.document_parser.connect()
 
-    async def close(self) -> None:
-        try:
-            await self.velocirag.close()
-        except BaseException:
-            pass
+        # Validate tools explicitly
+        tools = await self.document_parser.list_tools()
+        tool_names = {t["name"] for t in tools}
 
-        try:
+        valid_tools = {"parse_file", "parse", "partition"}
+        if not tool_names.intersection(valid_tools):
+            raise RuntimeError(
+                f"Unstructured MCP missing required parse tool. Found: {tool_names}"
+            )
+
+    async def close(self):
+        if self.retrieval:
+            await self.retrieval.close()
+
+        if self.filesystem:
             await self.filesystem.close()
-        except BaseException:
-            pass
+
+        if self.document_parser:
+            await self.document_parser.close()
