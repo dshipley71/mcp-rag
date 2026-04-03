@@ -2,6 +2,7 @@ pytest==8.2.0
 PyYAML==6.0.1
 mcp
 nest_asyncio
+pytest-asyncio
 rich
 anyio
 requests
