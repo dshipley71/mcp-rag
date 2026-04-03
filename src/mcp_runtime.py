@@ -5,15 +5,48 @@ from src.mcp_client import MCPToolClient
 
 
 class MCPRuntime:
-    def __init__(self, catalog: dict):
+    def __init__(self, catalog: dict = None, docs_dir: str = None):
+        """
+        Backward-compatible constructor.
+
+        Supports:
+        - MCPRuntime(catalog=...)
+        - MCPRuntime(docs_dir=...)  (legacy notebook usage)
+        """
+
+        # Backward compatibility mode
+        if catalog is None:
+            catalog = self._build_default_catalog(docs_dir)
+
         self.catalog = catalog
 
-        # Existing (DO NOT CHANGE)
-        self.retrieval: Optional[MCPToolClient] = None
-        self.filesystem: Optional[MCPToolClient] = None
+        self.retrieval = None
+        self.filesystem = None
+        self.document_parser = None
 
-        # NEW
-        self.document_parser: Optional[MCPToolClient] = None
+    def _build_default_catalog(self, docs_dir: str):
+        """
+        Minimal default catalog for notebook compatibility.
+        Keeps behavior deterministic.
+        """
+
+        if docs_dir is None:
+            docs_dir = "./docs"
+
+        return {
+            "filesystem": {
+                "command": "filesystem-mcp",
+                "args": [docs_dir],
+            },
+            "document_parser": {
+                "command": "unstructured-mcp",
+                "args": [],
+            },
+            "retrieval": {
+                "command": "velocirag-mcp",
+                "args": [],
+            },
+        }
 
     async def connect(self):
         """
